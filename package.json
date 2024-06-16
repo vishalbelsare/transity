@@ -6,14 +6,10 @@
   "type": "module",
   "browserslist": "> 0.5%, last 2 versions, not dead",
   "bin": {
-    "transity": "cli/main.js"
+    "transity": "index.js"
   },
   "scripts": {
-    "minify": "uglifyjs --compress --mangle --output index.js index.js",
-    "bundle": "spago bundle-module --platform=node && npm run minify",
-    "prepublishOnly": "npm test && npm run bundle",
-    "test": "spago test && npm run lint-js",
-    "lint-js": "eslint --max-warnings=0 --ignore-path=.gitignore scripts"
+    "prepublishOnly": "make test && make bundle"
   },
   "directories": {
     "test": "tests"
@@ -40,45 +36,34 @@
     "url": "https://github.com/feramhq/transity.git"
   },
   "dependencies": {
-    "@swc/helpers": "^0.4.2",
-    "archiver": "^5.3.1",
-    "big-integer": "^1.6.51",
-    "chrono-node": "^2.3.8",
+    "@eslint/js": "^9.5.0",
+    "@swc/helpers": "^0.5.11",
+    "@types/eslint__js": "^8.42.3",
+    "archiver": "^7.0.1",
+    "big-integer": "^1.6.52",
+    "chrono-node": "^2.7.6",
     "csvnorm": "^1.1.0",
     "js-yaml": "^4.1.0"
   },
   "optionalDependencies": {
     "converter": "0.0.5",
-    "inquirer": "^9.0.0",
-    "nightmare": "^3.0.2",
-    "nightmare-inline-download": "^0.2.2",
-    "tempy": "^3.0.0"
+    "inquirer": "^9.2.23",
+    "tempy": "^3.1.0"
   },
   "devDependencies": {
-    "assert": "^2.0.0",
-    "browserify-zlib": "^0.2.0",
-    "constants-browserify": "^1.0.0",
-    "conventional-changelog-cli": "^2.2.2",
-    "cssnano": "^5.1.12",
-    "esbuild": "^0.14.47",
-    "eslint": "^8.18.0",
-    "eslint-config-javascript": "^2.1.0",
+    "assert": "^2.1.0",
+    "conventional-changelog-cli": "^5.0.0",
+    "esbuild": "^0.21.5",
+    "eslint": "^9.5.0",
+    "eslint-config-javascript": "^3.0.0",
     "events": "^3.3.0",
     "markdown-toc": "^1.2.0",
-    "parcel": "^2.6.2",
-    "path-browserify": "^1.0.1",
+    "parcel": "^2.12.0",
     "process": "^0.11.10",
-    "purescript": "^0.15.3",
-    "spago": "^0.20.9",
-    "stream-browserify": "^3.0.0",
-    "uglify-js": "^3.16.1",
-    "util": "^0.12.4"
-  },
-  "eslintConfig": {
-    "parserOptions": {
-      "ecmaVersion": "2022"
-    },
-    "extends": "eslint-config-javascript"
+    "purescript": "^0.15.15",
+    "purs-tidy": "^0.11.0",
+    "spago": "^0.93.32",
+    "util": "^0.12.5"
   },
   "targets": {
     "docs": {

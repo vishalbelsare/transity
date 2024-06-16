@@ -2,23 +2,16 @@
 
 ## Getting Started
 
-Install dependencies:
+Check out the `makefile` for all available tasks.
+By simply running `make` it will also print a short list of them.
 
-```shell
-npm install
-npx spago install
-```
 
-Build project:
-
-```shell
-npx spago build
-```
+**Additional helpful commands:**
 
 Build and run:
 
 ```shell
-npx spago run --exec-args 'balance test/test.yaml'
+bun x spago run --exec-args 'balance test/test.yaml'
 ```
 
 Make `transity` executable available in your path:
@@ -31,19 +24,12 @@ All modifications to the source code (after building it)
 will now be available via the linked `transity` executable.
 
 
-## Test
-
-```shell
-npx spago test --watch
-```
-
-
 ## Documentation
 
 Generate and serve the Pursuit documentation with:
 
 ```sh
-npx spago docs
+bun x spago docs
 cd generated-docs/html
 python3 -m http.server 1222
 ```

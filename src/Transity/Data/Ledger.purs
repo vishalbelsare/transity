@@ -1,7 +1,25 @@
 module Transity.Data.Ledger where
+
 import Prelude
-  ( class Show, class Eq, bind, compare, identity, map, pure, show
-  , (#), ($), (+), (<#>), (<>), (||), (&&), (==), (/=), (>>=)
+  ( class Eq
+  , class Monoid
+  , class Semigroup
+  , class Show
+  , bind
+  , compare
+  , identity
+  , map
+  , pure
+  , show
+  , (#)
+  , ($)
+  , (&&)
+  , (+)
+  , (/=)
+  , (<#>)
+  , (<>)
+  , (==)
+  , (||)
   )
 
 import Control.Alt ((<|>))
@@ -9,23 +27,24 @@ import Control.Monad.Except (runExcept)
 import Control.Semigroupoid ((>>>))
 import Data.Argonaut.Core (toObject, Json, stringify)
 import Data.Argonaut.Decode (decodeJson)
-import Data.Argonaut.Encode (encodeJson)
 import Data.Argonaut.Decode.Class (class DecodeJson)
+import Data.Argonaut.Encode (encodeJson)
 import Data.Argonaut.Parser (jsonParser)
 import Data.Array (concat, groupBy, sort, sortBy, uncons, (!!), length)
 import Data.Array as Array
 import Data.DateTime (DateTime)
-import Data.Foldable (all, find)
+import Data.Foldable (all, find, foldMap)
 import Data.Function (flip)
 import Data.Generic.Rep (class Generic)
-import Data.Show.Generic (genericShow)
 import Data.HeytingAlgebra (not)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), maybe, fromMaybe, isJust)
+import Data.Maybe (Maybe(..), maybe, fromMaybe)
 import Data.Monoid (power)
-import Data.Newtype (unwrap)
+import Data.Newtype (class Newtype, unwrap)
+import Data.Rational as Rational
 import Data.Result (Result(..), toEither, fromEither)
 import Data.Set as Set
+import Data.Show.Generic (genericShow)
 import Data.String
   ( joinWith
   , Pattern(..)
@@ -33,9 +52,9 @@ import Data.String
   , replaceAll
   , Replacement(..)
   , split
-  , stripPrefix
   )
 import Data.String.Common (toLower)
+import Data.String.Utils (startsWith)
 import Data.Traversable (fold, foldr, intercalate, sequence)
 import Data.Tuple (Tuple(..))
 import Data.Unit (Unit, unit)
@@ -43,7 +62,7 @@ import Data.YAML.Foreign.Decode (parseYAMLToJson)
 import Foreign (renderForeignError)
 import Transity.Data.Account (Account(..))
 import Transity.Data.Account as Account
-import Transity.Data.Amount (Amount(..), Commodity)
+import Transity.Data.Amount (Amount(..), Commodity, isZero)
 import Transity.Data.Amount as Amount
 import Transity.Data.CommodityMap
   ( CommodityMap
@@ -52,79 +71,89 @@ import Transity.Data.CommodityMap
   , isCommodityMapZero
   , isCommodityZero
   )
+import Transity.Data.Config (ColorFlag(..))
 import Transity.Data.Entity (Entity(..), toTransfers)
 import Transity.Data.Transaction (Transaction(..))
 import Transity.Data.Transaction as Transaction
 import Transity.Data.Transfer (Transfer(..), negateTransfer)
 import Transity.Utils
-  ( getFieldMaybe
+  ( dateShowPretty
+  , dateShowPrettyLong
+  , getFieldMaybe
   , getObjField
   , mergeWidthRecords
-  , utcToIsoString
-  , utcToIsoDateString
-  , dateShowPretty
-  , widthRecordZero
-  , ColorFlag(..)
-  , SortOrder(..)
-  , bigIntToNumber
-  , stringifyJsonDecodeError
   , resultWithJsonDecodeError
+  , SortOrder(..)
+  , stringifyJsonDecodeError
+  , utcToIsoDateString
+  , utcToIsoString
+  , widthRecordZero
   )
-
 
 -- | List of all transactions
 newtype Ledger = Ledger
-  { owner :: String
+  { owner :: Maybe String
   , entities :: Maybe (Array Entity)
   , transactions :: Array Transaction
   }
 
 derive instance genericLedger :: Generic Ledger _
 derive newtype instance eqLedger :: Eq Ledger
+derive instance newtypeLedger :: Newtype Ledger _
 
 instance showLedger :: Show Ledger where
   show = genericShow
 
 instance decodeLedger :: DecodeJson Ledger where
-  decodeJson json = toEither $
-    resultWithJsonDecodeError $ decodeJsonLedger json
+  decodeJson json = toEither
+    $ resultWithJsonDecodeError
+    $ decodeJsonLedger json
 
+instance monoidLedger :: Monoid Ledger where
+  mempty = Ledger
+    { owner: Nothing
+    , entities: Nothing
+    , transactions: []
+    }
+
+instance semigroupLedger :: Semigroup Ledger where
+  append (Ledger l1) (Ledger l2) =
+    Ledger
+      { owner: l1.owner
+      , entities: l1.entities <> l2.entities
+      , transactions: l1.transactions <> l2.transactions
+      }
 
 data BalanceFilter
   = BalanceOnly String
   | BalanceOnlyOwner
   | BalanceAll
 
-
-startsWith :: String -> String -> Boolean
-startsWith prefix testString =
-  isJust $ stripPrefix (Pattern prefix) testString
-
-
 decodeJsonLedger :: Json -> Result String Ledger
 decodeJsonLedger json = do
-  object       <- maybe (Error "Ledger is not an object") Ok (toObject json)
-  owner        <- object `getObjField` "owner"
-  entities     <- object `getFieldMaybe` "entities"
+  object <- maybe (Error "Ledger is not an object") Ok (toObject json)
+  owner <- object `getFieldMaybe` "owner"
+  entities <- object `getFieldMaybe` "entities"
   transactions <- object `getObjField` "transactions"
-  pure $ Ledger {owner, entities, transactions}
-
+  pure $ Ledger { owner, entities, transactions }
 
 verifyAccounts :: Ledger -> Result String Ledger
 verifyAccounts wholeLedger@(Ledger ledger) =
   let
     definedAccounts = Set.fromFoldable $ concat
       $ (fromMaybe [] ledger.entities) <#>
-        (\(Entity {id, accounts}) -> [id] <>
-          ((fromMaybe [] accounts) <#>
-            (\(Account account) -> id <> ":" <> account.id))
-        )
+          ( \(Entity { id, accounts }) -> [ id ] <>
+              ( (fromMaybe [] accounts) <#>
+                  (\(Account account) -> id <> ":" <> account.id)
+              )
+          )
     usedAccounts =
-      (ledger.transactions <#> \(Transaction {transfers}) -> transfers)
-      # concat
-      # map (\(Transfer {from, to}) -> [from, to])
-      # concat
-      # Set.fromFoldable
+      (ledger.transactions <#> \(Transaction { transfers }) -> transfers)
+        # concat
+        # map (\(Transfer { from, to }) -> [ from, to ])
+        # concat
+        # Set.fromFoldable
+
     undefinedAccounts :: Array String
     undefinedAccounts = Set.toUnfoldable $
       usedAccounts `Set.difference` definedAccounts
@@ -133,13 +162,12 @@ verifyAccounts wholeLedger@(Ledger ledger) =
       [] -> Ok wholeLedger
       _ -> Error $
         "Following accounts were not declared, "
-        <> "but still used for transfers:\n\n"
-        <> "entities:"
-        <> joinWith "" (undefinedAccounts <#> ("\n  - id: " <> _))
-        <> "\n\n"
-        <> "Please add or rename the missing accounts "
-        <> "to the entities section to fix this error"
-
+          <> "but still used for transfers:\n\n"
+          <> "entities:"
+          <> joinWith "" (undefinedAccounts <#> ("\n  - id: " <> _))
+          <> "\n\n"
+          <> "Please add or rename the missing accounts "
+          <> "to the entities section to fix this error"
 
 isAmountInMapZero :: BalanceMap -> String -> Commodity -> Boolean
 isAmountInMapZero balanceMap accountId commodity =
@@ -149,38 +177,36 @@ isAmountInMapZero balanceMap accountId commodity =
     fromMaybe false $
       comMap <#> (flip isCommodityZero) commodity
 
-
 verifyBalances :: BalanceMap -> Array Transfer -> Result String Unit
 verifyBalances balanceMap balancingTransfers =
   case uncons balancingTransfers of
-    Just {head: transfHead@(Transfer tfHeadRec), tail: transfTail} ->
+    Just { head: transfHead@(Transfer tfHeadRec), tail: transfTail } ->
       let
         newBal = balanceMap `addTransfer` transfHead
-        getCommodity {amount: Amount _ commodity} = commodity
+        getCommodity { amount: Amount _ commodity } = commodity
         targetCom = getCommodity tfHeadRec
       in
-        if tfHeadRec.note == Just "___BALANCE___"
-        then
-          if not $ isAmountInMapZero newBal tfHeadRec.from targetCom
-          then Error(
-              "Error:\nThe verification balance of account '" <> tfHeadRec.from
-              <> "' on '" <> (fromMaybe "" $ tfHeadRec.utc <#> dateShowPretty)
-              <> "'\nis off by "
-              <> (Map.lookup tfHeadRec.from newBal
-                    # fromMaybe Map.empty
-                    # Map.values
-                    # find (\(Amount _ commodity) -> commodity == targetCom)
-                    <#> (Amount.negate >>> Amount.showPretty)
-                    # fromMaybe "ERROR: Amount is missing"
+        if tfHeadRec.note == Just "___BALANCE___" then
+          if not $ isAmountInMapZero newBal tfHeadRec.from targetCom then Error
+            ( "ERROR:\nThe verification balance of account '" <> tfHeadRec.from
+                <> "' on '"
+                <> (fromMaybe "" $ tfHeadRec.utc <#> dateShowPretty)
+                <> "'\nis off by "
+                <>
+                  ( Map.lookup tfHeadRec.from newBal
+                      # fromMaybe Map.empty
+                      # Map.values
+                      # find (\(Amount _ commodity) -> commodity == targetCom)
+                      <#> (Amount.negate >>> Amount.showPretty)
+                      # fromMaybe "ERROR: Amount is missing"
                   )
-              <> " from the calculated balance."
+                <> " from the calculated balance."
             )
           else verifyBalances balanceMap transfTail
         else
           verifyBalances newBal transfTail
     Nothing ->
       Ok unit
-
 
 entitiesToTransfers :: Maybe (Array Entity) -> Array Transfer
 entitiesToTransfers entities =
@@ -189,59 +215,48 @@ entitiesToTransfers entities =
     # fold
     -- Label the balancing transfers to tell them apart from normal transfers
     -- FIXME: Really hacky and should be solved with a wrapper datatype
-    <#> (\(Transfer tf) -> Transfer tf {note = Just "___BALANCE___"})
-
+    <#> (\(Transfer tf) -> Transfer tf { note = Just "___BALANCE___" })
 
 verifyLedgerBalances :: Ledger -> Result String Ledger
-verifyLedgerBalances wholeLedger@(Ledger {transactions, entities}) =
+verifyLedgerBalances wholeLedger@(Ledger { transactions, entities }) =
   let
     balancingTransfers = entitiesToTransfers entities
     transxTransfers = Transaction.toTransfers transactions
     combined = (balancingTransfers <> transxTransfers)
-      # sortBy (\(Transfer transfA) (Transfer transfB) ->
-                    compare transfA.utc transfB.utc)
+      # sortBy
+          ( \(Transfer transfA) (Transfer transfB) ->
+              compare transfA.utc transfB.utc
+          )
     result = verifyBalances Map.empty combined
   in
-    if entities == Nothing || entities == Just []
-    then Ok wholeLedger
+    if entities == Nothing || entities == Just [] then Ok wholeLedger
     else
       case result of
         Ok _ -> Ok wholeLedger
         Error error -> Error error
-
 
 fromJson :: String -> Result String Ledger
 fromJson json = do
   jsonObj <- fromEither $ jsonParser json
   ledger <- stringifyJsonDecodeError $ fromEither $ decodeJson jsonObj
   pure ledger
-    >>= verifyAccounts
-    >>= verifyLedgerBalances
-    -- TODO: >>= addInitalBalance
-
 
 fromYaml :: String -> Result String Ledger
-fromYaml yaml =
+fromYaml yaml = do
   let
     result = yaml
       # parseYAMLToJson
       # runExcept
       # fromEither
-    unverified = case result of
-      Error error -> Error
-        ( "Could not parse YAML: "
-          <> fold (map renderForeignError error)
-        )
-      Ok json -> stringifyJsonDecodeError $ fromEither $ decodeJson json
-  in
-    unverified
-      >>= verifyAccounts
-      >>= verifyLedgerBalances
 
+  case result of
+    Error error ->
+      Error $ "Could not parse YAML: " <> foldMap renderForeignError error
+    Ok json ->
+      stringifyJsonDecodeError $ fromEither $ decodeJson json
 
 showPretty :: Ledger -> String
 showPretty = showPrettyAligned ColorNo
-
 
 showPrettyAligned :: ColorFlag -> Ledger -> String
 showPrettyAligned colorFlag (Ledger l) =
@@ -249,11 +264,14 @@ showPrettyAligned colorFlag (Ledger l) =
     transactionsPretty = map
       (Transaction.showPrettyAligned colorFlag)
       l.transactions
-  in ""
-    <> "Journal for \"" <> l.owner <> "\"\n"
-    <> "=" `power` 80 <> "\n"
-    <> fold transactionsPretty
-
+  in
+    ""
+      <> "Journal for \""
+      <> (l.owner # fromMaybe "UNKNOWN")
+      <> "\"\n"
+      <> "=" `power` 80
+      <> "\n"
+      <> fold transactionsPretty
 
 showTransfers :: ColorFlag -> Ledger -> String
 showTransfers colorFlag (Ledger l) =
@@ -261,28 +279,28 @@ showTransfers colorFlag (Ledger l) =
     transactionsPretty = l.transactions
       <#> Transaction.showTransfersWithDate colorFlag
       # fold
-  in ""
-    <> "Journal for \"" <> l.owner <> "\"\n"
-    <> "=" `power` 80 <> "\n"
-    <> transactionsPretty
-
+  in
+    ""
+      <> "Journal for \""
+      <> (l.owner # fromMaybe "UNKNOWN")
+      <> "\"\n"
+      <> "=" `power` 80
+      <> "\n"
+      <> transactionsPretty
 
 type BalanceMap = Map.Map Account.Id CommodityMap
-
 
 isBalanceMapZero :: BalanceMap -> Boolean
 isBalanceMapZero balanceMap =
   (Map.values balanceMap)
-  # all isCommodityMapZero
-
+    # all isCommodityMapZero
 
 addTransaction :: BalanceMap -> Transaction -> BalanceMap
-addTransaction balanceMap (Transaction {transfers})  =
+addTransaction balanceMap (Transaction { transfers }) =
   foldr (flip addTransfer) balanceMap transfers
 
-
 addTransfer :: BalanceMap -> Transfer -> BalanceMap
-addTransfer balanceMap (Transfer {to, from, amount})  =
+addTransfer balanceMap (Transfer { to, from, amount }) =
   let
     receiverArray = split (Pattern ":") to
     receiverWithDefault = case length receiverArray of
@@ -293,7 +311,7 @@ addTransfer balanceMap (Transfer {to, from, amount})  =
       1 -> from <> ":_default_"
       _ -> from
     updatedFromAccount = Map.alter
-      (\maybeValue -> case maybeValue of
+      ( \maybeValue -> case maybeValue of
           Nothing ->
             Just ((Map.empty :: CommodityMap) `subtractAmountFromMap` amount)
           Just commodityMap ->
@@ -303,7 +321,7 @@ addTransfer balanceMap (Transfer {to, from, amount})  =
       balanceMap
   in
     Map.alter
-      (\maybeValue -> case maybeValue of
+      ( \maybeValue -> case maybeValue of
           Nothing ->
             Just ((Map.empty :: CommodityMap) `addAmountToMap` amount)
           Just commodityMap ->
@@ -312,65 +330,78 @@ addTransfer balanceMap (Transfer {to, from, amount})  =
       receiverWithDefault
       updatedFromAccount
 
-
 subtractTransfer :: BalanceMap -> Transfer -> BalanceMap
-subtractTransfer balanceMap transfer  =
-  let transferNegated = negateTransfer transfer
-  in balanceMap `addTransfer` transferNegated
-
+subtractTransfer balanceMap transfer =
+  let
+    transferNegated = negateTransfer transfer
+  in
+    balanceMap `addTransfer` transferNegated
 
 showEntities :: SortOrder -> Ledger -> String
 showEntities sortOrder (Ledger ledger) =
-  case ledger.entities of
-    Nothing ->
-      "Journal does not contain any entities"
+  let
+    showId :: String -> String
+    showId id =
+      "  - id: " <> id <> "\n"
 
-    Just entities ->
-      "entities:\n" <> (entities
-        # (case sortOrder of
-              CustomSort -> identity
-              Alphabetically ->
-                sortBy (\(Entity entityA) (Entity entityB) ->
-                  compare (toLower entityA.id) (toLower entityB.id)
-                )
-          )
-        <#> (\(Entity entity) ->
-                   "  - id: " <> entity.id <> "\n"
-                <> (if isJust entity.name
-                    then "    name: " <> fromMaybe "" entity.name <> "\n"
-                    else "")
-                <> (if isJust entity.note
-                    then "    note: " <> fromMaybe "" entity.note <> "\n"
-                    else "")
-                <> (if isJust entity.utc
-                    then "    utc: " <> (entity.utc <#> show # fromMaybe "")
-                      <> "\n"
-                    else "")
-                <> (if isJust entity.tags
-                    then "    tags: "
-                      <> (entity.tags
-                            <#> show
-                            # fromMaybe ""
-                            -- TODO: Can tags contain quote characters?
-                            # replaceAll (Pattern "\"") (Replacement "")
-                          )
-                      <> "\n"
-                    else "")
-                <> (if isJust entity.accounts
-                    then "    accounts: "
-                      <> (fromMaybe [] entity.accounts
-                            <#> (\(Account acc) -> "\n      - "
-                                    <> stringify (encodeJson acc)
-                                )
-                            # fold
-                          )
-                      <> "\n"
-                    else "")
-                <> "\n"
-            )
-        # fold
+    showName :: String -> String
+    showName name =
+      "    name: " <> name <> "\n"
+
+    showNote :: String -> String
+    showNote note =
+      "    note: " <> note <> "\n"
+
+    showUTC :: DateTime -> String
+    showUTC utc =
+      "    utc: " <> (utc # dateShowPrettyLong) <> "\n"
+
+    showTags :: Array String -> String
+    showTags tags = "    tags: "
+      <>
+        (
+          -- TODO: Can tags contain quote characters?
+          tags # show # replaceAll (Pattern "\"") (Replacement "")
         )
+      <> "\n"
 
+    showAccount :: Account -> String
+    showAccount (Account acc) =
+      "\n      - " <> stringify (encodeJson acc)
+
+    showAccounts :: Array Account -> String
+    showAccounts accounts =
+      "    accounts: " <> (accounts <#> showAccount # fold) <> "\n"
+
+    showEntity :: Entity -> String
+    showEntity (Entity entity) =
+      (entity.id # showId)
+        <> (entity.name <#> showName # fromMaybe "")
+        <> (entity.note <#> showNote # fromMaybe "")
+        <> (entity.utc <#> showUTC # fromMaybe "")
+        <> (entity.tags <#> showTags # fromMaybe "")
+        <> (entity.accounts <#> showAccounts # fromMaybe "")
+        <> "\n"
+  in
+    case ledger.entities of
+      Nothing ->
+        "Journal does not contain any entities"
+
+      Just entities ->
+        "entities:\n" <>
+          ( entities
+              #
+                ( case sortOrder of
+                    CustomSort -> identity
+                    Alphabetically ->
+                      sortBy
+                        ( \(Entity entityA) (Entity entityB) ->
+                            compare (toLower entityA.id) (toLower entityB.id)
+                        )
+                )
+              <#> showEntity
+              # fold
+          )
 
 showBalance :: BalanceFilter -> ColorFlag -> Ledger -> String
 showBalance balFilter colorFlag (Ledger ledger) =
@@ -383,133 +414,173 @@ showBalance balFilter colorFlag (Ledger ledger) =
       -> String
       -> Tuple String (Map.Map Commodity Amount)
     mapToEmpty accTuple@(Tuple accId _) account =
-      if accId == account || (accId # startsWith (account <> ":"))
-      then accTuple
+      if accId == account || (accId # startsWith (account <> ":")) then accTuple
       else (Tuple "" Map.empty)
 
     balancesArray :: Array (Tuple String (Map.Map Commodity Amount))
     balancesArray = balanceMap
-      # (Map.toUnfoldable :: BalanceMap ->
-          Array (Tuple Account.Id CommodityMap))
-      <#> (\accTuple -> case balFilter of
-              BalanceAll -> accTuple
-              BalanceOnlyOwner -> mapToEmpty accTuple (ledger.owner)
-              BalanceOnly account -> mapToEmpty accTuple account
-          )
-      # Array.filter (\accTuple -> accTuple /= (Tuple "" Map.empty))
+      #
+        ( Map.toUnfoldable
+            :: BalanceMap
+            -> Array (Tuple Account.Id CommodityMap)
+        )
+      <#>
+        ( \accTuple -> case balFilter of
+            BalanceAll -> accTuple
+            BalanceOnlyOwner ->
+              case ledger.owner of
+                Just owner -> mapToEmpty accTuple owner
+                _ -> accTuple
+            BalanceOnly account -> mapToEmpty accTuple account
+        )
+      -- Don't show commodities with an amount of 0
+      <#>
+        ( \(Tuple accId comMap) ->
+            Tuple accId
+              ( comMap # Map.mapMaybe
+                  ( \amount ->
+                      if isZero amount then Nothing
+                      else Just amount
+                  )
+              )
+        )
+      # Array.filter (\(Tuple _ comMap) -> comMap /= Map.empty)
 
     normAccId accId =
       replace (Pattern ":_default_") (Replacement "") accId
 
-    accWidthRecs ::
-      Array
-        { account :: Int
-        , commodity :: Int
-        , fraction :: Int
-        , integer :: Int
-        }
+    accWidthRecs
+      :: Array
+           { account :: Int
+           , commodity :: Int
+           , fraction :: Int
+           , integer :: Int
+           }
     accWidthRecs = balancesArray
-      <#> (\(Tuple accId comMap) ->
-              Account.toWidthRecord (normAccId accId) comMap)
+      <#>
+        ( \(Tuple accId comMap) ->
+            Account.toWidthRecord (normAccId accId) comMap
+        )
 
-    widthRecord ::
-      { account :: Int
-      , commodity :: Int
-      , fraction :: Int
-      , integer :: Int
-      }
+    widthRecord
+      :: { account :: Int
+         , commodity :: Int
+         , fraction :: Int
+         , integer :: Int
+         }
     widthRecord = foldr mergeWidthRecords widthRecordZero accWidthRecs
 
     marginLeft = 2
 
-    showTuple (Tuple accId comMap) = (Account.showPrettyAligned
-        colorFlag
-        widthRecord { account = widthRecord.account + marginLeft }
-        (normAccId accId)
-        comMap
+    showTuple (Tuple accId comMap) =
+      ( Account.showPrettyAligned
+          colorFlag
+          widthRecord { account = widthRecord.account + marginLeft }
+          (normAccId accId)
+          comMap
       )
   in
     balancesArray
       <#> showTuple
       # fold
 
-
 -- | Serializes the journal to a command line printable version
 -- | (lines of columns).
 getEntries :: Ledger -> Maybe (Array (Array String))
-getEntries (Ledger {transactions, entities}) = do
+getEntries (Ledger { transactions, entities }) = do
   let
-    getQunty (Amount quantity _ ) = show $ bigIntToNumber quantity
-    getCmdty (Amount _ commodity ) = unwrap commodity
+    getQunty (Amount quantity _) = show $ Rational.toNumber quantity
+    getCmdty (Amount _ commodity) = unwrap commodity
 
     splitTransfer :: Transfer -> Maybe (Array (Array String))
     splitTransfer (Transfer tfer) =
       let
         fromAmnt = Amount.negate tfer.amount
         getFromAndTo date =
-          [ [date, tfer.from, getQunty fromAmnt, getCmdty fromAmnt]
-          , [date, tfer.to, getQunty tfer.amount, getCmdty tfer.amount]
+          [ [ date, tfer.from, getQunty fromAmnt, getCmdty fromAmnt ]
+          , [ date, tfer.to, getQunty tfer.amount, getCmdty tfer.amount ]
           ]
       in
         (tfer.utc <#> utcToIsoString) <#> getFromAndTo
 
-  splitted <- do
-    transactions
-    <#> (\(Transaction tact) -> tact.transfers
-      <#> (\(Transfer tfer) -> Transfer (tfer { utc = tfer.utc <|> tact.utc })))
-    # concat
-    <#> splitTransfer
-    # sequence
+  splitted <-
+    do
+      transactions
+      <#>
+        ( \(Transaction tact) -> tact.transfers
+            <#>
+              ( \(Transfer tfer) -> Transfer
+                  (tfer { utc = tfer.utc <|> tact.utc })
+              )
+        )
+      # concat
+      <#> splitTransfer
+      # sequence
 
   let
     initialEntries = entitiesToInitialTransfers entities <#>
       \(Transfer t) ->
-          let isoString = fromMaybe "INVALID DATE" $ t.utc <#> utcToIsoString
-          in [[ isoString
-              , replace (Pattern ":_default_") (Replacement "") t.from
-              , getQunty t.amount
-              , getCmdty t.amount
-              ]]
+        let
+          isoString = fromMaybe "INVALID DATE" $ t.utc <#> utcToIsoString
+        in
+          [ [ isoString
+            , replace (Pattern ":_default_") (Replacement "") t.from
+            , getQunty t.amount
+            , getCmdty t.amount
+            ]
+          ]
 
   pure $ (splitted <> initialEntries) # concat
-
 
 entitiesToInitialTransfers :: Maybe (Array Entity) -> Array Transfer
 entitiesToInitialTransfers entities =
   (fromMaybe [] entities)
     <#> toTransfers
     # fold
-    # Array.filter (\(Transfer tf) ->
-        Amount.isZero tf.amount && tf.from /= "_void_")
-
+    # Array.filter
+        ( \(Transfer tf) ->
+            Amount.isZero tf.amount && tf.from /= "_void_"
+        )
 
 maybeToArr :: forall a. Maybe a -> Array a
 maybeToArr m = case m of
-  Just val -> [val]
+  Just val -> [ val ]
   Nothing -> []
-
 
 -- | Serialize the journal to the Ledger format.
 entriesToLedger :: Ledger -> String
 entriesToLedger (Ledger { transactions }) =
   let
-    print :: DateTime -> Maybe String -> Account.Id
-      -> Account.Id -> Amount -> String
+    print
+      :: DateTime
+      -> Maybe String
+      -> Account.Id
+      -> Account.Id
+      -> Amount
+      -> String
     print dt maybeNote from to amount =
-        let date = dt # utcToIsoDateString
-            note = maybe "" identity maybeNote
-        in date <> " " <> note <> "\n" <>
-           "  " <> to <> "  " <> (Amount.showPretty amount) <> "\n" <>
-           "  " <> from <> "\n"
+      let
+        date = dt # utcToIsoDateString
+        note = maybe "" identity maybeNote
+      in
+        date <> " " <> note <> "\n"
+          <> "  "
+          <> to
+          <> "  "
+          <> (Amount.showPretty amount)
+          <> "\n"
+          <> "  "
+          <> from
+          <> "\n"
 
     result = do
-        Transaction { utc , note, transfers } <- transactions
-        xutc <- maybeToArr utc
-        Transfer { to, from, amount } <- transfers
-        pure $ print xutc note from to amount
+      Transaction { utc, note, transfers } <- transactions
+      xutc <- maybeToArr utc
+      Transfer { to, from, amount } <- transfers
+      pure $ print xutc note from to amount
 
-  in result # joinWith "\n"
-
+  in
+    result # joinWith "\n"
 
 showEntries :: String -> Ledger -> Maybe String
 showEntries separator ledger = do
@@ -519,7 +590,6 @@ showEntries separator ledger = do
     # sort
     <#> joinWith separator
     # joinWith "\n"
-
 
 showEntriesByAccount :: Ledger -> Maybe String
 showEntriesByAccount ledger = do
@@ -535,11 +605,11 @@ showEntriesByAccount ledger = do
   entries <- getEntries ledger
 
   pure $ entries
-      # sortBy compareAccComm
-      # groupBy isEqualAccComm
-      <#> Array.fromFoldable  -- Convert each NonEmpty to Array
-      <#> sort  -- Sort each entry by date
-      <#> (\array -> [[accCommOfGroup array]] <> array)
-      # intercalate [["\n"]]  -- Add space between account entries
-      <#> joinWith " "  -- Join fields for each row
-      # joinWith "\n"
+    # sortBy compareAccComm
+    # groupBy isEqualAccComm
+    <#> Array.fromFoldable -- Convert each NonEmpty to Array
+    <#> sort -- Sort each entry by date
+    <#> (\array -> [ [ accCommOfGroup array ] ] <> array)
+    # intercalate [ [ "\n" ] ] -- Add space between account entries
+    <#> joinWith " " -- Join fields for each row
+    # joinWith "\n"

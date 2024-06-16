@@ -1,6 +1,6 @@
 module ApproxRatio where
 
--- import Data.BigInt
+-- import JS.BigInt
 --
 -- TODO: Implement (cloned from Haskell's approxRational)
 -- simplest x y =
@@ -31,7 +31,6 @@ module ApproxRatio where
 --          if r == 0 then q % 1
 --     else if q /= q'  then (q + 1) % 1
 --                      else (q * n'' + d'') % n''
-
 
 -- approxRational :: Number -> Number -> Ratio BigInt
 -- approxRational rat eps  =

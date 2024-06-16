@@ -1,10 +1,19 @@
 module Transity.Data.Transaction where
 
 import Prelude
-  ( class Show, class Eq, bind, map, pure
-  , (#), ($), (<>), (>>=), (<#>), (/=)
+  ( class Show
+  , class Eq
+  , bind
+  , map
+  , pure
+  , (#)
+  , ($)
+  , (<>)
+  , (>>=)
+  , (<#>)
   )
 
+import Control.Alt ((<|>))
 import Control.Monad.Except (runExcept)
 import Data.Argonaut.Core (toObject, Json)
 import Data.Argonaut.Decode (decodeJson)
@@ -12,16 +21,18 @@ import Data.Argonaut.Decode.Class (class DecodeJson)
 import Data.Argonaut.Decode.Combinators (getFieldOptional, defaultField)
 import Data.Argonaut.Parser (jsonParser)
 import Data.DateTime (DateTime)
-import Data.Foldable (fold)
+import Data.Foldable (foldMap)
 import Data.Generic.Rep (class Generic)
 import Data.Show.Generic (genericShow)
-import Data.Maybe (Maybe(Nothing), fromMaybe, maybe)
+import Data.Maybe (Maybe, fromMaybe, maybe)
 import Data.Monoid (power)
 import Data.Newtype (class Newtype)
 import Data.Result (Result(..), toEither, fromEither)
 import Data.YAML.Foreign.Decode (parseYAMLToJson)
 import Foreign (renderForeignError)
 import Text.Format (format, width)
+
+import Transity.Data.Config (ColorFlag(..))
 import Transity.Data.Transfer (Transfer(..))
 import Transity.Data.Transfer as Transfer
 import Transity.Utils
@@ -30,11 +41,9 @@ import Transity.Utils
   , stringToDateTime
   , dateShowPretty
   , indentSubsequent
-  , ColorFlag(..)
   , stringifyJsonDecodeError
   , resultWithJsonDecodeError
   )
-
 
 -- newtype FilePath = FilePath String
 
@@ -54,19 +63,20 @@ instance showTransaction :: Show Transaction where
   show = genericShow
 
 instance decodeTransaction :: DecodeJson Transaction where
-  decodeJson json = toEither $
-    resultWithJsonDecodeError $ decodeJsonTransaction json
-
+  decodeJson json = toEither
+    $ resultWithJsonDecodeError
+    $ decodeJsonTransaction json
 
 decodeJsonTransaction :: Json -> Result String Transaction
 decodeJsonTransaction json = do
   object <- maybe (Error "Transaction is not an object") Ok (toObject json)
 
-  id        <- object `getFieldMaybe` "id"
-  utc       <- object `getFieldMaybe` "utc"
-  note      <- object `getFieldMaybe` "note"
-  files     <- stringifyJsonDecodeError $
-    fromEither $ object `getFieldOptional` "files" `defaultField` []
+  id <- object `getFieldMaybe` "id"
+  utc <- object `getFieldMaybe` "utc"
+  note <- object `getFieldMaybe` "note"
+  files <- stringifyJsonDecodeError
+    $ fromEither
+    $ object `getFieldOptional` "files" `defaultField` []
   transfers <- object `getObjField` "transfers"
 
   pure $ Transaction
@@ -77,13 +87,11 @@ decodeJsonTransaction json = do
     , transfers
     }
 
-
 fromJson :: String -> Result String Transaction
 fromJson string = do
   json <- fromEither $ jsonParser string
   transaction <- stringifyJsonDecodeError $ fromEither $ decodeJson json
   pure transaction
-
 
 fromYaml :: String -> Result String Transaction
 fromYaml yaml =
@@ -96,45 +104,36 @@ fromYaml yaml =
     case result of
       Error error -> Error
         ( "Could not parse YAML: "
-          <> fold (map renderForeignError error)
+            <> foldMap renderForeignError error
         )
       Ok json -> stringifyJsonDecodeError $ fromEither $ decodeJson json
 
-
 toTransfers :: Array Transaction -> Array Transfer
-toTransfers transactions =
-  transactions
-    <#> (\(Transaction transac) -> transac.transfers
-            <#> (\(Transfer transf) -> Transfer (transf
-                  { utc = if transf.utc /= Nothing
-                          then transf.utc
-                          else transac.utc
-                  }
-              )))
-    # fold
-
+toTransfers = foldMap transactionTransfers
 
 showTransfersWithDate :: ColorFlag -> Transaction -> String
-showTransfersWithDate _ (Transaction transac) =
-  transac.transfers
-    <#> (\(Transfer transf) -> Transfer (transf
-            { utc = if transf.utc /= Nothing
-                    then transf.utc
-                    else transac.utc
-            }
-        ))
-    <#> Transfer.showPrettyColorized
-    # fold
+showTransfersWithDate _ transac =
+  transac
+    # transactionTransfers
+    # foldMap Transfer.showPrettyColorized
 
+transactionTransfers :: Transaction -> Array Transfer
+transactionTransfers (Transaction transac) =
+  transac.transfers
+    <#>
+      ( \(Transfer transf) -> Transfer
+          ( transf
+              { utc = transf.utc <|> transac.utc }
+          )
+      )
 
 showPretty :: Transaction -> String
 showPretty = showPrettyAligned ColorNo
 
-
 showPrettyAligned :: ColorFlag -> Transaction -> String
 showPrettyAligned colorFlag (Transaction tact) =
   let
-    transfersPretty = map
+    transfersPretty = foldMap
       (Transfer.showPrettyAligned colorFlag 15 15 5 3 10)
       tact.transfers
     offsetDate = 16
@@ -142,7 +141,8 @@ showPrettyAligned colorFlag (Transaction tact) =
     addId str = " | (id " <> str <> ")"
   in
     fromMaybe (" " `power` offsetDate) (map dateShowPretty tact.utc)
-    <> " | " <> format (width 30) (fromMaybe "NO NOTE" tact.note)
-    <> fromMaybe "" (map addId tact.id)
-    <> indentSubsequent offsetIndentation ("\n" <> fold transfersPretty)
-    <> "\n"
+      <> " | "
+      <> format (width 30) (fromMaybe "NO NOTE" tact.note)
+      <> fromMaybe "" (map addId tact.id)
+      <> indentSubsequent offsetIndentation ("\n" <> transfersPretty)
+      <> "\n"

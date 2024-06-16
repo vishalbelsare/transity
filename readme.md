@@ -9,11 +9,9 @@ Keep track of your 💵, 🕘, 🐖, 🐄, 🍻 on your command line.
   width='600'
 />
 
-For help please come visit us on one of the following sites:
+For help, please come visit us on our [GitHub Discussions] page!
 
-- [Reddit](https://www.reddit.com/r/Transity/)
-- [Matrix](matrix:r/transity:matrix.feram.io) (#transity:matrix.feram.io)
-- [Gitter](https://gitter.im/feramhq/transity)
+[GitHub Discussions]: https://github.com/feramhq/Transity/discussions
 
 ---
 
@@ -45,63 +43,39 @@ For help please come visit us on one of the following sites:
 
 <!-- tocstop -->
 
-## List of Features / TODOs
 
-- [x] Modeled on transactions instead of debiting / crediting accounts
-  => Support for complex transactions made up of several transfers
-- [x] Dedicated payer (from) and payee (to) fields (ledger only supports payee)
-- [x] No misuse of accounts as categories / tags => direct support for them
-- [ ] No hard-coded asset / liability connotation as it is viewpoint dependent
-  => Choose viewpoint when printing the balance
-- [x] Easily editable & processable file format based on [YAML]
+## Features
+
+- Easily editable and processable file format based on [YAML]
+- Modeled on transactions instead of debiting / crediting accounts
+    => Support for complex transactions made up of several transfers
+    - Dedicated payer (from) and payee (to) fields (ledger only supports payee)
+- No misuse of accounts as categories / tags
+    => Direct support for tags
 - Clear separation between
-  - [x] Physical account (e.g. wallet, bank account)
-  - [x] Entities (e.g. my mum, a company)
-  - [ ] Purpose of transaction (food, travel)
-- [x] Initial balances
-- [x] High precision timestamps
-  - [ ] Including nanoseconds
-- [x] BigInt rational numbers to eliminate rounding errors
-- [ ] Support for all states of transaction life cycle
-  1. Request - Request to exchange a commodity
-  1. Offer - Specification of commodity & expected trade item
-  1. Acceptance - Affirmation of interest in offered exchange
-  1. Fulfillments
-  1. Certification - Acknowledgment that exchange was performed
-- [ ] Support for any type of commodity (e.g. even time and messages)
-- [ ] Differentiation between transfers, transactions & exchanges
-  - [ ] Special syntax for exchanges
-- [ ] Meta data for all entities (transactions, accounts, entities, …)
-- [x] Verifies sole use of predefined entities
-- [x] Checks match with verification balances
-- Features for duplicates
-  - [ ] Print list of possible duplicates
-  - [ ] Label an entry explicitly as a duplicate to store it in several places
-- [ ] Syntax checking in addition to syntax highlighting
-- [ ] CSV import
-- [ ] Link to receipt file
-- [ ] Dashboard
-- [ ] Budgets (including progress visualization)
-- Export to various formats for post-processing
-  - [x] [Gnuplot] (for trends)
-  - [ ] [Graphviz] (for account / entity relations)
-  - [ ] [JS-Sequence-Diagrams] (sequence of transactions)
-  - [x] [(H)ledger Format] (for using (H)ledger exclusive features)
-- Additional features for crypto currencies
-  - TODO: Think about what features exactly
-- [ ] Multi file support
-- [ ] Cache-files to speed up processing of large data sets
-- [ ] Support for time limited commodities (e.g. subscription for a month)
-- Commodities
-  - [ ] Treat as scientific units (e.g 1 k€ == 1000 €)
-  - [ ] Hard vs Soft vs Fungible vs …
-  - [ ] Define which are allowed / prohibited for each account
-- [ ] Generate EPC QR Codes for transfers
+    - Physical account (e.g. wallet, bank account)
+    - Entities (e.g. my mum, a company)
+    - Purpose of transaction (e.g. food, travel)
+- No hard-coded asset / liability connotation as it is viewpoint dependent
+    => Choose viewpoint by setting the owner of the journal
+- Initial balances
+- High precision timestamps in ISO 8601 format
+- Reference external files (e.g. receipts, contracts, bank statements, …)
+- Safety checks
+    - BigInt fractional numbers to eliminate rounding errors
+    - Verifies exclusive use of predefined entities
+    - Checks in transactions match with verification balances
+    - Checks that referenced external files exist
+        and that all external files are referenced
+- Export to other formats for post-processing
+    - [Gnuplot] (for trends)
+    - [(H)ledger Format] (for using (H)ledger exclusive features)
+    - CSV and TSV (for further processing in spreadsheet software)
+    - XLSX aka Excel (for further processing in spreadsheet software)
+- Multi file support
 
 [YAML]: http://yaml.org
 [Gnuplot]: http://www.gnuplot.info
-[Graphviz]: https://graphviz.org
-[JS-Sequence-Diagrams]: https://bramp.github.io/js-sequence-diagrams
 [(H)ledger Format]: http://hledger.org/journal.html
 
 
@@ -111,7 +85,7 @@ Transity is distributed as a JavaScript bundle and can therefore
 be installed via [npm](https://npmjs.com):
 
 ```sh
-npm install --global transity
+bun install --global transity
 ```
 
 
@@ -316,7 +290,19 @@ transity gplot-cumul examples/journal.yaml \
 ![Screenshot of cumulative account balance plot](./images/screenshot-plot.png)
 
 
-## Import from Ledger CLI
+## Import
+
+### AI Powered
+
+We built a dedicated OpenAI GPT to convert any financial data
+(e.g. CSVs, bank statements, chat history, …) to a Transity journal file.
+
+Check it out at
+[chat.openai.com/g/g-aUph953Vj-transity](
+  https://chat.openai.com/g/g-aUph953Vj-transity).
+
+
+### From Ledger CLI
 
 Execute the included ledger2transity script:
 
@@ -476,6 +462,7 @@ of which parties where involved.
 
 - What food?
 - Where did you buy it?
+- When exactly did you buy it?
 - Which supermarket?
 
 ```ledger
@@ -545,6 +532,39 @@ Benchmark #1: ledger -f test.ledger balance
 
 ## Ideas
 
+- Features for duplicates
+    - Print list of possible duplicates
+    - Label an entry explicitly as a duplicate to store it in several places
+- CSV import
+- Dashboard
+- Budgets (including progress visualization)
+- Cache-files to speed up processing of large data sets
+- Generate EPC QR Codes for transfers
+- LSP server for journal files
+- Export to [Graphviz] (for account / entity relations)
+- Export to [JS-Sequence-Diagrams] (sequence of transactions)
+- Meta data for all entities (transactions, accounts, entities, …)
+- Nanosecond precision for timestamps
+- Additional features for crypto currencies
+- Commodities
+    - Treat as scientific units (e.g 1 k€ == 1000 €)
+    - First class support for any type of commodity (e.g. time and messages)
+    - Support for time limited commodities (e.g. subscription for a month)
+    - Define which are allowed / prohibited for each account
+    - Hard vs Soft vs Fungible vs …
+- Differentiation between transfers, transactions & exchanges
+    - Special syntax for exchanges
+- Support for all states of transaction life cycle
+    1. Request - Request to exchange a commodity
+    1. Offer - Specification of commodity & expected trade item
+    1. Acceptance - Affirmation of interest in offered exchange
+    1. Fulfillments
+    1. Certification - Acknowledgment that exchange was performed
+
+[Graphviz]: https://graphviz.org
+[JS-Sequence-Diagrams]: https://bramp.github.io/js-sequence-diagrams
+
+
 ### Entry / Value Date
 
 There are no separate fields for entry or value dates necessary.
@@ -566,36 +586,50 @@ transactions:
 
 ### Syntax
 
-This is a first concept for an alternative syntax for the YAML journal file:
+This is a first concept of an alternative syntax for the journal file:
 
 ```transity
+# Comments after a hash
+
 2016-04-16 18:50:28
-#20135604
-1 year registration of domain "example.org"
-john      -> paypal    :  9.95 €
-paypal    -> namecheap : 10.69 $
-paypal    -> icann     :  0.18 $
-namecheap -> john      :  1    Domain
+| 1 year registration of domain "example.org"
++tagOne  # Tags are written after a plus
++tagTwo
+id: 20135604  # Arbitrary metadata
+# Transactions are indentend by 2 spaces
+  john -> paypal : 9.95 €
+  paypal -> namecheap : {10 + 0.69} $
+  paypal -> icann : 0.18 $ +fee
+  namecheap -> john : 1 Domain
 ```
 
 
 ## Related
 
-- [plaintextaccounting.org] - Best of plain text accounting.
+For a full list of plain text accounting tools check out
+[plaintextaccounting.org](https://plaintextaccounting.org).
+Here are some of the links
+that are especially relevant for Transity:
+
+
+### Other Plain Text Accounting Tools
+
+- [Ledger] - The original command line accounting tool (written in C++).
+- [Hledger] - Ledger clone with a focus on UX, reliability,
+    and real-world practicality (written in Haskell).
+- [Beancount] - Double-entry accounting from text files (written in Python).
+- [Rust Ledger] - Ledger clone that uses YAML as well (written in Rust).
+
+[Beancount]: https://beancount.github.io
+[Hledger]: https://hledger.org
+[Ledger]: https://ledger-cli.org
+[Rust Ledger]: https://github.com/ebcrowder/rust_ledger
+
+
+### Tutorials
+
 - [cs007.blog] - Personal finance for engineers.
 - [principlesofaccounting.com] - Online tutorial on accounting.
-- [npoacct.sfconservancy.org] -
-    Effort to create accounting software for non-profit organizations.
-- [github.com/nuex/t] - sh script for working with ledger timelog files.
-- [github.com/bankscrap/bankscrap] -
-    Ruby gem to extract balance and transactions from multiple banks.
-- [github.com/prashants/webzash] -
-    Easy to use web based double entry accounting software.
 
-[plaintextaccounting.org]: http://plaintextaccounting.org
 [cs007.blog]: https://cs007.blog
-[principlesofaccounting.com]: http://principlesofaccounting.com
-[npoacct.sfconservancy.org]: https://npoacct.sfconservancy.org
-[github.com/nuex/t]: https://github.com/nuex/t
-[github.com/bankscrap/bankscrap]: https://github.com/bankscrap/bankscrap
-[github.com/prashants/webzash]: https://github.com/prashants/webzash
+[principlesofaccounting.com]: https://www.principlesofaccounting.com

@@ -1,125 +1,119 @@
 module Main where
 
-import Prelude (Unit, bind, discard, pure, unit, (#), ($), (<#>), (<>), (/=), (>))
+import Prelude
+  ( Unit
+  , bind
+  , discard
+  , pure
+  , show
+  , unit
+  , (#)
+  , ($)
+  , (/=)
+  , (<#>)
+  , (<>)
+  , (>)
+  , (>>=)
+  )
 
 import Ansi.Codes (Color(..))
 import Ansi.Output (withGraphics, foreground)
-import Data.Array (concat, cons, difference, filter, null, zip, (!!))
+import Data.Array (concat, cons, difference, filter, fold, null, zip)
 import Data.Eq ((==))
 import Data.Foldable (foldMap)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (over)
-import Data.Result (Result(..), note, isOk, fromEither)
+import Data.Result (Result(..), fromEither, isOk, note)
 import Data.String (Pattern(..), indexOf, length)
 import Data.Traversable (for_, sequence)
 import Data.Tuple (Tuple(..), fst, snd)
 import Effect (Effect)
-import Effect.Class.Console (log, error)
 import Effect.Aff (launchAff_)
+import Effect.Class.Console (log)
+import Effect.Console (warn)
 import Node.Encoding (Encoding(UTF8))
 import Node.FS.Async (stat)
 import Node.FS.Stats (isFile, isDirectory)
 import Node.FS.Sync as Sync
 import Node.Path as Path
-import Node.Process (argv, cwd, exit)
+import Node.Process (cwd, setExitCode)
 
-import Transity.Data.Ledger (Ledger(..), BalanceFilter(..))
+import Oclis (ExecutorContext, callCliApp)
+import Oclis.Types (CliArgPrim(..), CliArgument(..))
+import Transity.Data.Config (ColorFlag(..), config)
+import Transity.Data.Ledger
+  ( BalanceFilter(..)
+  , Ledger(..)
+  , verifyAccounts
+  , verifyLedgerBalances
+  )
 import Transity.Data.Ledger as Ledger
 import Transity.Data.Transaction (Transaction(..))
 import Transity.Plot as Plot
-import Transity.Utils (ColorFlag(..), SortOrder(..))
+import Transity.Utils (SortOrder(..), errorAndExit)
 import Transity.Xlsx (writeToZip, entriesAsXlsx)
-
-type Config = { colorState :: ColorFlag }
-
-config :: Config
-config =
-  { colorState: ColorYes
-  }
-
-
-usageString :: String
-usageString = """
-Usage: transity <command> <path/to/journal.yaml>
-
-Command             Description
-------------------  ------------------------------------------------------------
-balance             Simple balance of the owner's accounts
-balance-all         Simple balance of all accounts
-transactions        All transactions and their transfers
-transfers           All transfers with one transfer per line
-entries             All individual deposits & withdrawals, space separated
-entities            [WIP] List all referenced entities
-entities-sorted     [WIP] List all referenced entities sorted alphabetically
-ledger-entries      All entries in Ledger format
-csv                 Transfers, comma separated (printed to stdout)
-tsv                 Transfers, tab separated (printed to stdout)
-xlsx                XLSX file with all transfers (printed to stdout)
-entries-by-account  All individual deposits & withdrawals, grouped by account
-gplot               Code and data for gnuplot impulse diagram
-                      to visualize transfers of all accounts
-gplot-cumul         Code and data for cumuluative gnuplot step chart
-                      to visualize balance of all accounts
-unused-files        Recursively list all files in a directory
-                      which are not referenced in the journal
-help                Print this help dialog
-version             Print currently used version
-"""
-
 
 -- TODO: Move validation to parsing
 utcError :: String
 utcError =
   "All transfers or their parent transaction must have a valid UTC field"
 
-
-
-run :: String -> String -> Ledger -> Result String String
-run command filePathRel ledger =
+runSimpleCmd :: String -> String -> Ledger -> Result String String
+runSimpleCmd command filePathRel ledger =
   case command of
-    "balance"            -> Ok $
+    "balance" -> Ok $
       Ledger.showBalance BalanceOnlyOwner ColorYes ledger
-    "balance-all"        -> Ok $ Ledger.showBalance BalanceAll ColorYes ledger
+    "balance-all" -> Ok $ Ledger.showBalance BalanceAll ColorYes ledger
     -- "balance-on"         -> Ok $
     --   Ledger.showBalanceOn dateMaybe ColorYes ledger
-    "transactions"       -> Ok $ Ledger.showPrettyAligned ColorYes ledger
-    "transfers"          -> Ok $ Ledger.showTransfers ColorYes ledger
-    "entries"            -> note utcError $ Ledger.showEntries  " " ledger
-    "entities"           -> Ok $ Ledger.showEntities CustomSort ledger
-    "entities-sorted"    -> Ok $ Ledger.showEntities Alphabetically ledger
-    "ledger-entries"     -> Ok $ Ledger.entriesToLedger ledger
-    "csv"                -> note utcError $ Ledger.showEntries  "," ledger
-    "tsv"                -> note utcError $ Ledger.showEntries  "\t" ledger
+    "transactions" -> Ok $ Ledger.showPrettyAligned ColorYes ledger
+    "transfers" -> Ok $ Ledger.showTransfers ColorYes ledger
+    "entries" -> note utcError $ Ledger.showEntries " " ledger
+    "entities" -> Ok $ Ledger.showEntities CustomSort ledger
+    "entities-sorted" -> Ok $ Ledger.showEntities Alphabetically ledger
+    "ledger-entries" -> Ok $ Ledger.entriesToLedger ledger
+    "csv" -> note utcError $ Ledger.showEntries "," ledger
+    "tsv" -> note utcError $ Ledger.showEntries "\t" ledger
     "entries-by-account" -> note utcError $ Ledger.showEntriesByAccount ledger
     "gplot" ->
       (note utcError $ Ledger.showEntriesByAccount ledger)
-      <#> (\entries -> Plot.gplotCode $ Plot.configDefault
-        # (Plot.GplotConfig `over` (_
-            { data = entries
-            , title = filePathRel
-            })))
+        <#>
+          ( \entries -> Plot.gplotCode $ Plot.configDefault
+              #
+                ( Plot.GplotConfig `over`
+                    ( _
+                        { data = entries
+                        , title = filePathRel
+                        }
+                    )
+                )
+          )
     "gplot-cumul" ->
       (note utcError $ Ledger.showEntriesByAccount ledger)
-      <#> (\entries -> Plot.gplotCodeCumul $ Plot.configDefault
-        # (Plot.GplotConfig `over` (_
-            { data = entries
-            , title = filePathRel <> " - Cumulative"
-            })))
+        <#>
+          ( \entries -> Plot.gplotCodeCumul $ Plot.configDefault
+              #
+                ( Plot.GplotConfig `over`
+                    ( _
+                        { data = entries
+                        , title = filePathRel <> " - Cumulative"
+                        }
+                    )
+                )
+          )
 
     other -> Error ("\"" <> other <> "\" is not a valid command")
 
-
 -- | Asynchronously logs all non existent referenced files
 checkFilePaths :: String -> Ledger -> Effect (Result String String)
-checkFilePaths ledgerFilePath (Ledger {transactions}) = do
+checkFilePaths ledgerFilePath (Ledger { transactions }) = do
   let
     files = foldMap (\(Transaction tact) -> tact.files) transactions
 
   for_ files \filePathRel -> do
-    filePathAbs <- Path.resolve [ledgerFilePath] filePathRel
+    filePathAbs <- Path.resolve [ ledgerFilePath ] filePathRel
     stat filePathAbs $ \statsResult ->
-      if isOk $ fromEither statsResult
-      then pure unit
+      if isOk $ fromEither statsResult then pure unit
       else
         log $ withGraphics
           (foreground Yellow)
@@ -127,45 +121,89 @@ checkFilePaths ledgerFilePath (Ledger {transactions}) = do
 
   pure $ Ok ""
 
+execForLedger
+  :: String
+  -> String
+  -> String
+  -> Ledger
+  -> Effect (Result String String)
+execForLedger currentDir filePathRel command ledger = do
+  filePathAbs <- Path.resolve [ currentDir ] filePathRel
+  let
+    journalDir =
+      if indexOf (Pattern "/dev/fd/") filePathAbs == Just 0 then currentDir
+      else Path.dirname filePathAbs
+  _ <- checkFilePaths journalDir ledger
+
+  case command of
+    "xlsx" -> do
+      launchAff_ $ writeToZip
+        Nothing -- Means stdout
+        (entriesAsXlsx ledger)
+      pure (Ok "")
+    _ ->
+      pure $ runSimpleCmd command filePathRel ledger
 
 loadAndExec
   :: String
   -> Array String
   -> Effect (Result String String)
-loadAndExec currentDir [command, filePathRel] = do
-  filePathAbs <- Path.resolve [currentDir] filePathRel
+loadAndExec currentDir [ command, filePathRel ] = do
+  filePathAbs <- Path.resolve [ currentDir ] filePathRel
   ledgerFileContent <- Sync.readTextFile UTF8 filePathAbs
 
   case (Ledger.fromYaml ledgerFileContent) of
     Error msg -> pure $ Error msg
-    Ok ledger -> do
-      let
-        journalDir =
-          if indexOf (Pattern "/dev/fd/") filePathAbs == Just 0
-          then currentDir
-          else Path.dirname filePathAbs
-      _ <- checkFilePaths journalDir ledger
-
-      case command of
-        "xlsx" -> do
-          launchAff_ $ writeToZip
-            Nothing  -- Means stdout
-            (entriesAsXlsx ledger)
-          pure (Ok "")
-        _ ->
-          pure $ run command filePathRel ledger
+    Ok ledger -> execForLedger currentDir filePathRel command ledger
 
 loadAndExec _ _ =
   pure $ Error "loadAndExec expects an array with length 2"
 
+getJournalPaths :: String -> Array CliArgPrim -> Result String (Array String)
+getJournalPaths journalPathRel extraJournalPaths = sequence $
+  [ Ok journalPathRel ] <>
+    ( extraJournalPaths
+        <#>
+          ( \valArg -> case valArg of
+              (TextArg path) -> Ok path
+              _ -> Error $ "Invalid argument type: " <> show valArg
+          )
+    )
 
-errorAndExit :: String -> Effect Unit
-errorAndExit message = do
-  error (if config.colorState == ColorYes
-        then withGraphics (foreground Red) message
-        else message)
-  exit 1
+combineJournals :: String -> Array String -> Effect (Result String Ledger)
+combineJournals currentDir paths = do
+  paths
+    <#>
+      ( \filePathRel -> do
+          filePathAbs <- Path.resolve [ currentDir ] filePathRel
+          ledgerFileContent <- Sync.readTextFile UTF8 filePathAbs
 
+          pure $ Ledger.fromYaml ledgerFileContent
+      )
+    # sequence
+    <#> sequence
+    <#> (\ledgerRes -> ledgerRes <#> fold)
+
+buildLedgerAndRun
+  :: String
+  -> String
+  -> Array CliArgPrim
+  -> (Ledger -> Effect (Result String Unit))
+  -> Effect (Result String Unit)
+buildLedgerAndRun currentDir journalPathRel extraJournalPaths callback = do
+  let journalPaths = getJournalPaths journalPathRel extraJournalPaths
+
+  case journalPaths of
+    Error message -> errorAndExit config message
+    Ok paths -> do
+      combineRes <- combineJournals currentDir paths
+      case
+        combineRes
+          >>= verifyAccounts
+          >>= verifyLedgerBalances
+        of
+        Error msg -> pure $ Error msg
+        Ok ledger -> ledger # callback
 
 getAllFiles :: String -> Effect (Array String)
 getAllFiles directoryPath =
@@ -184,8 +222,7 @@ getAllFiles directoryPath =
         dirTuples = filter (\tuple -> isDirectory $ snd tuple) pathStatsTuples
         files = fileTuples <#> fst
 
-      if null dirTuples
-      then
+      if null dirTuples then
         pure $ files
       else do
         filesNested <- sequence $ dirTuples
@@ -194,68 +231,100 @@ getAllFiles directoryPath =
   in
     addFiles directoryPath
 
+checkUnusedFiles
+  :: String -> String -> Array CliArgPrim -> Effect (Result String Unit)
+checkUnusedFiles filesDirPath jourPathRel extraJournalPaths = do
+  currentDir <- cwd
+  buildLedgerAndRun currentDir jourPathRel extraJournalPaths $
+    \ledger@(Ledger { transactions }) -> do
+      let
+        journalDir =
+          if indexOf (Pattern "/dev/fd/") jourPathRel == Just 0 then
+            currentDir
+          else Path.dirname jourPathRel
+
+      _ <- checkFilePaths journalDir ledger
+
+      filesDir <- Path.resolve [] filesDirPath
+      foundFiles <- getAllFiles filesDir
+      let
+        ledgerFilesRel = foldMap
+          (\(Transaction tact) -> tact.files)
+          transactions
+      ledgerFilesAbs <- sequence $ ledgerFilesRel
+        <#> (\fileRel -> Path.resolve [ journalDir ] fileRel)
+
+      let
+        unusedFiles = difference foundFiles ledgerFilesAbs
+        makeGreen = withGraphics (foreground Green)
+        makeYellow = withGraphics (foreground Yellow)
+
+      if null unusedFiles then
+        log $ makeGreen $ "No unused files found in " <> filesDir
+      else do
+        warn $ makeYellow $ "Warning: "
+          <> "Following files are not referenced in the journal"
+
+        for_ unusedFiles $ \filePathAbs ->
+          warn $ makeYellow $ "- " <> filePathAbs
+
+      pure $ Ok unit
+
+executor :: ExecutorContext -> Effect (Result String Unit)
+executor context = do
+  case context.command, context.arguments of
+    Just "unused-files",
+    [ ValArg (TextArg filesDirPath)
+    , ValArg (TextArg jourPathRel)
+    , ValArgList extraJournalPaths
+    ] -> checkUnusedFiles filesDirPath jourPathRel extraJournalPaths
+
+    Just "unused-files",
+    [ ValArg (TextArg filesDirPath)
+    , ValArg (TextArg jourPathRel)
+    ] -> checkUnusedFiles filesDirPath jourPathRel []
+
+    Just cmdName,
+    [ ValArg (TextArg journalPathRel) ] -> do
+      currentDir <- cwd
+      result <- loadAndExec currentDir [ cmdName, journalPathRel ]
+
+      case result of
+        Ok output ->
+          if length output > 0 then do
+            log output
+            pure $ Ok unit
+          else
+            pure $ Ok unit
+        Error message ->
+          errorAndExit config message
+
+    Just cmdName,
+    [ ValArg (TextArg jourPathRel)
+    , ValArgList extraJournalPaths
+    ] -> do
+      currentDir <- cwd
+      buildLedgerAndRun currentDir jourPathRel extraJournalPaths $
+        \ledger -> do
+          result <- execForLedger
+            currentDir
+            jourPathRel -- TODO: Must incorporate all paths
+            cmdName
+            ledger
+
+          case result of
+            Ok output -> do
+              log output
+              pure $ Ok unit
+            Error message ->
+              errorAndExit config message
+
+    _,
+    _ -> do
+      log context.usageString
+      setExitCode 1
+      pure $ Ok unit
 
 main :: Effect Unit
 main = do
-  arguments <- argv
-
-  case [arguments !! 2, arguments !! 3, arguments !! 4] of
-    [Just "help",    Nothing, Nothing] -> log usageString
-    [Just "version", Nothing, Nothing] -> log "0.8.0"
-
-    [Just _,        Nothing, Nothing] ->
-      errorAndExit $ "No path to a ledger file was provided\n\n" <> usageString
-
-    [Just "unused-files", Just filesDirPath, Just ledgerFilePath] -> do
-      ledgerFilePathAbs <- Path.resolve [] ledgerFilePath
-      ledgerFileContent <- Sync.readTextFile UTF8 ledgerFilePathAbs
-
-      case (Ledger.fromYaml ledgerFileContent) of
-        Error msg -> errorAndExit msg
-        Ok ledger@(Ledger {transactions}) -> do
-          currentDir <- cwd
-          let
-            journalDir =
-              if indexOf (Pattern "/dev/fd/") ledgerFilePathAbs == Just 0
-              then currentDir
-              else Path.dirname ledgerFilePathAbs
-          _ <- checkFilePaths journalDir ledger
-
-          filesDir <- Path.resolve [] filesDirPath
-          foundFiles <- getAllFiles filesDir
-          let
-            ledgerFilesRel = foldMap
-              (\(Transaction tact) -> tact.files)
-              transactions
-          ledgerFilesAbs <- sequence $ ledgerFilesRel
-              <#> (\fileRel -> Path.resolve [journalDir] fileRel)
-
-          for_ (difference foundFiles ledgerFilesAbs) $ \filePathAbs ->
-            log $ withGraphics
-              (foreground Yellow)
-              ("Warning: \"" <> filePathAbs
-                  <> "\" is not referenced in the journal")
-
-
-    [Just command, Just ledgerFilePath, Nothing] -> do
-      currentDir <- cwd
-      result <- loadAndExec currentDir [command, ledgerFilePath]
-
-      case result of
-        Ok output -> if length output > 0
-          then log output
-          else pure unit
-        Error message -> errorAndExit message
-
-    _ -> log usageString
-
-
--- TODO: Use Monad transformers
--- resultT = ExceptT <<< toEither
--- unResultT = unExceptT >>> either Error Ok
--- main = do
---   result <- runResultT $ join $ map resultT $
---     loadAndExec <$> lift cwd <*> (resultT <<< parseArguments =<< lift argv)
---   case result of
---     Ok output -> log output
---     Error message -> error message
+  callCliApp executor
